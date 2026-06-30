@@ -1,0 +1,23 @@
+# Attack overlay: adds an EXTERNAL, unauthenticated attacker (`sbtc-attacker`)
+# that floods ONE target signer (sbtc-signer-2) to OOM via the bootstrap
+# connected_peers / ListenFailure leak. The attacker is NOT in the signer set.
+# Signers are switched to json-file logging so `docker logs` works.
+services:
+  sbtc-signer-1:
+    logging: { driver: json-file }
+  sbtc-signer-2:
+    logging: { driver: json-file }
+  sbtc-signer-3:
+    logging: { driver: json-file }
+
+  sbtc-attacker:
+    container_name: sbtc-attacker
+    build: { context: ./attack, dockerfile: Dockerfile }
+    environment:
+      TARGET_HOST: sbtc-signer-2
+      TARGET_PORT: "4122"
+      # Public devnet key of the target, used only to derive its peer id.
+      TARGET_PRIVKEY_HEX: "9bfecf16c9c12792589dd2b843f850d5b89b81a04f8ab91c083bdf6709fbefee01"
+      CONCURRENCY: "120"
+    restart: "no"
+    profiles: [attack]

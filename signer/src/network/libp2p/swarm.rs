@@ -20,10 +20,11 @@ use tokio::sync::Mutex;
 
 use super::errors::SignerSwarmError;
 
-use super::allow_signers;
+use super::gatekeeper;
 use super::{bootstrap, event_loop};
 use crate::GOSSIPSUB_MAX_TRANSMIT_SIZE;
-use crate::context::{Context, SignerState};
+use crate::context::Context;
+use crate::context::SignerState;
 use crate::keys::PrivateKey;
 
 /// The maximum number of substreams _per connection_. This is used to limit
@@ -47,16 +48,16 @@ const NEGOTIATION_TIMEOUT_SECS: u64 = 10;
 
 /// Define the behaviors of the [`SignerSwarm`] libp2p network.
 ///
-/// Field order matters: the derive macro composes each behaviour's
-/// `handle_established_*_connection` call in declaration order with `?`, so
-/// gatekeepers must appear before any behaviour that records per-connection
-/// state. `allow_signers` runs first to reject non-signer peers during the
-/// upgrade phase; `connection_limits` then enforces numeric slot limits;
-/// `bootstrap` (which only records state on `ConnectionEstablished` now)
-/// follows after both gates have approved.
+/// The derive macro composes each behavior's `handle_established_*` call
+/// in declaration order and bailing on a returned `Err`, so gatekeepers
+/// should appear before any behavior that records per-connection state.
 #[derive(NetworkBehaviour)]
 pub struct SignerBehavior {
-    pub allow_signers: allow_signers::Behavior,
+    /// The gatekeeper behavior that rejects non-signer peers during the
+    /// connection upgrade phase.
+    pub gatekeeper: gatekeeper::Behavior,
+    /// The connection limits behavior that enforces numeric slot limits.
+    pub connection_limits: connection_limits::Behaviour,
     pub gossipsub: gossipsub::Behaviour,
     mdns: Toggle<mdns::tokio::Behaviour>,
     pub kademlia: Toggle<kad::Behaviour<MemoryStore>>,
@@ -64,7 +65,6 @@ pub struct SignerBehavior {
     pub identify: identify::Behaviour,
     pub autonat_client: Toggle<autonat::v2::client::Behaviour<StdRng>>,
     pub autonat_server: Toggle<autonat::v2::server::Behaviour<StdRng>>,
-    pub connection_limits: connection_limits::Behaviour,
     pub bootstrap: bootstrap::Behavior,
 }
 
@@ -123,7 +123,7 @@ impl SignerBehavior {
         let bootstrap = bootstrap::Behavior::new(bootstrap_config);
 
         Ok(Self {
-            allow_signers: allow_signers::Behavior::new(config.signer_state),
+            gatekeeper: gatekeeper::Behavior::new(config.signer_state),
             gossipsub: Self::gossipsub(&keypair, config.max_transmit_size)?,
             mdns,
             kademlia,
@@ -240,9 +240,7 @@ impl<'a> SignerSwarmBuilder<'a> {
     /// Create a new [`SignerSwarmBuilder`] with the given private key.
     ///
     /// By default the swarm is wired to a fresh, empty [`SignerState`], whose
-    /// signer set is empty and so rejects every peer. Production callers
-    /// should pass the shared state via [`Self::with_signer_state`] so the
-    /// allow-list gate tracks the live signer set.
+    /// signer set is empty and so rejects every peer.
     pub fn new(private_key: &'a PrivateKey) -> Self {
         Self {
             private_key,
@@ -262,10 +260,8 @@ impl<'a> SignerSwarmBuilder<'a> {
         }
     }
 
-    /// Wires the swarm to the shared [`SignerState`]. The allow-list gate
-    /// reads the current signer set from this handle on every connection, so
-    /// updates made elsewhere are observed without rebuilding the swarm. Any
-    /// peer not in the set is rejected during the connection-upgrade phase.
+    /// Wires the swarm to the shared [`SignerState`]. Any peer not in the
+    /// set is rejected during the connection-upgrade phase.
     pub fn with_signer_state(mut self, signer_state: Arc<SignerState>) -> Self {
         self.signer_state = signer_state;
         self

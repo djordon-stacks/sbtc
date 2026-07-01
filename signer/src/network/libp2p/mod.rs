@@ -8,6 +8,7 @@ mod allow_signers;
 mod bootstrap;
 mod errors;
 mod event_loop;
+mod gatekeeper;
 mod multiaddr;
 mod network;
 mod swarm;
